@@ -1,0 +1,10 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: OneDeploymentIAC
+  annotations:
+    github.com/project-slug: jay-panick0012/OneDeploymentIAC
+spec:
+  type: other
+  lifecycle: unknown
+  owner: jay-panick0012
