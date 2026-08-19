@@ -22,14 +22,16 @@ jobs:
         with:
           script: |
             const fs = require("fs");
-            const raw = JSON.parse(fs.readFileSync(".github/region-matrix.json", "utf8"));
+            const raw = JSON.parse(fs.readFileSync(".github/environments.json", "utf8"));
             const cells = [];
-            for (const [environment, clouds] of Object.entries(raw)) {
+            for (const [environment, entry] of Object.entries(raw)) {
               if (environment.startsWith("$")) continue;
-              for (const [cloud, regions] of Object.entries(clouds)) {
-                for (const r of regions) {
+              const tier = entry.tier;
+              for (const cloud of ["aws", "azure", "gcp"]) {
+                for (const r of entry[cloud] || []) {
                   cells.push({
                     environment,
+                    tier,
                     cloud,
                     region: r.region,
                     region_index: r.region_index,
@@ -46,10 +48,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    # Read-only plan against the real environment's state. Reuses the same
-    # "<env>-plan" read-only credential as PR plans for staging/production so
-    # a nightly cron job is never the thing waiting on a human approval.
-    environment: ${{ matrix.environment == 'dev' && 'dev' || format('{0}-plan', matrix.environment) }}
+    # Read-only plan against the real environment's state. Gated by TIER (see
+    # terraform-plan.yml) and reuses the same "<tier>-plan" read-only
+    # credential as PR plans so a nightly cron job never waits on a human.
+    environment: ${{ matrix.tier == 'dev' && 'dev' || format('{0}-plan', matrix.tier) }}
     permissions:
       id-token: write
       contents: read

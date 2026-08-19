@@ -4,7 +4,7 @@
 # Scaffolds a new environments/<env>/<cloud>/<region>/ root by copying an
 # existing region directory of the same environment+cloud (so it inherits the
 # right tier sizing) and rewriting the region/location and backend key. It
-# does NOT pick a region_index for you -- open .github/region-matrix.json,
+# does NOT pick a region_index for you -- open .github/environments.json,
 # find the highest region_index in use across the WHOLE file, and pass the
 # next integer. Reusing an index will collide CIDR ranges with another
 # region's VPC/VNet.
@@ -66,6 +66,6 @@ Write-Host "Next steps:"
 Write-Host "  1. Double-check $targetDir\terraform.tfvars and backend.hcl -- region"
 Write-Host "     names sometimes appear inside other strings (e.g. a bucket name) that"
 Write-Host "     this script's find/replace may not catch."
-Write-Host "  2. Add this region to .github/region-matrix.json under"
+Write-Host "  2. Add this region to .github/environments.json under"
 Write-Host "     `"$Environment`" -> `"$Cloud`", with the same region_index ($RegionIndex)."
 Write-Host "  3. cd $targetDir; terraform init -backend-config=backend.hcl; terraform plan -var-file=terraform.tfvars"

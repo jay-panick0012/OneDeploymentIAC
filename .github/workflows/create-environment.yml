@@ -1,0 +1,105 @@
+name: Create Environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment_name:
+        description: "New environment instance name (lowercase, alphanumeric/hyphen, e.g. uat2, dev3, release-candidate-1)"
+        required: true
+      tier:
+        description: "Sizing tier -- see .github/tiers.json for what each one means"
+        required: true
+        type: choice
+        options:
+          - dev
+          - uat
+          - staging
+          - rc
+          - production
+      aws_regions:
+        description: "Comma-separated AWS regions (e.g. us-east-1,eu-west-1). Leave blank to skip AWS."
+        required: false
+        default: ""
+      azure_regions:
+        description: "Comma-separated Azure regions (e.g. eastus,westeurope). Leave blank to skip Azure."
+        required: false
+        default: ""
+      gcp_regions:
+        description: "Comma-separated GCP regions (e.g. us-central1,europe-west1). Leave blank to skip GCP."
+        required: false
+        default: ""
+
+# Note: adding a new tier to tiers.json also means adding it to the "options"
+# list above -- workflow_dispatch choice inputs can't read a dynamic list.
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate environment name
+        run: |
+          name="${{ inputs.environment_name }}"
+          if [[ ! "$name" =~ ^[a-z][a-z0-9-]*$ ]]; then
+            echo "::error::environment_name must be lowercase alphanumeric/hyphen, starting with a letter (got: $name)"
+            exit 1
+          fi
+
+      - name: Generate environment files
+        env:
+          AWS_REGIONS: ${{ inputs.aws_regions }}
+          AZURE_REGIONS: ${{ inputs.azure_regions }}
+          GCP_REGIONS: ${{ inputs.gcp_regions }}
+        run: |
+          args=()
+          [ -n "$AWS_REGIONS" ] && args+=(--aws="$AWS_REGIONS")
+          [ -n "$AZURE_REGIONS" ] && args+=(--azure="$AZURE_REGIONS")
+          [ -n "$GCP_REGIONS" ] && args+=(--gcp="$GCP_REGIONS")
+          node scripts/generate-environment.cjs "${{ inputs.environment_name }}" "${{ inputs.tier }}" "${args[@]}"
+
+      - name: Commit and push branch
+        id: commit
+        run: |
+          branch="env/${{ inputs.environment_name }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "Add ${{ inputs.environment_name }} environment (tier: ${{ inputs.tier }})"
+          git push -u origin "$branch" --force
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "Add environment: ${{ inputs.environment_name }} (${{ inputs.tier }})" \
+            --head "${{ steps.commit.outputs.branch }}" \
+            --base main \
+            --body "$(cat <<EOF
+          Requested by @${{ github.actor }} via the **Create Environment** workflow.
+
+          | | |
+          |---|---|
+          | Instance name | \`${{ inputs.environment_name }}\` |
+          | Tier | \`${{ inputs.tier }}\` |
+          | AWS regions | ${{ inputs.aws_regions != '' && inputs.aws_regions || '_none_' }} |
+          | Azure regions | ${{ inputs.azure_regions != '' && inputs.azure_regions || '_none_' }} |
+          | GCP regions | ${{ inputs.gcp_regions != '' && inputs.gcp_regions || '_none_' }} |
+
+          Before merging:
+          1. Fill in the real account/subscription/project IDs in each new \`terraform.tfvars\` (marked \`# replace\`).
+          2. Review the Terraform Plan comments this PR triggers automatically.
+          3. Confirm the \`${{ inputs.tier }}\` / \`${{ inputs.tier }}-plan\` GitHub Environments already exist with the right cloud credentials -- creating an environment reuses its tier's credentials, it does not provision new secrets.
+
+          Once merged, the next push to \`main\` applies this environment (gated by the \`${{ inputs.tier }}\` GitHub Environment's approval rules, same as any other change to that tier).
+          EOF
+          )"

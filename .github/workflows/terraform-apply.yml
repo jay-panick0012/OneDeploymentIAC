@@ -6,12 +6,13 @@ on:
     paths:
       - "modules/**"
       - "environments/**"
-      - ".github/region-matrix.json"
+      - ".github/environments.json"
+      - ".github/tiers.json"
       - ".github/workflows/terraform-apply.yml"
   workflow_dispatch:
     inputs:
       environment:
-        description: "Limit apply to a single environment (dev, staging, production). Leave blank to apply all."
+        description: "Limit apply to a single environment instance (e.g. dev, uat1, staging). Leave blank to apply all."
         required: false
         default: ""
 
@@ -35,16 +36,18 @@ jobs:
         with:
           script: |
             const fs = require("fs");
-            const raw = JSON.parse(fs.readFileSync(".github/region-matrix.json", "utf8"));
+            const raw = JSON.parse(fs.readFileSync(".github/environments.json", "utf8"));
             const filterEnv = `${{ github.event.inputs.environment }}`;
             const cells = [];
-            for (const [environment, clouds] of Object.entries(raw)) {
+            for (const [environment, entry] of Object.entries(raw)) {
               if (environment.startsWith("$")) continue;
               if (filterEnv && environment !== filterEnv) continue;
-              for (const [cloud, regions] of Object.entries(clouds)) {
-                for (const r of regions) {
+              const tier = entry.tier;
+              for (const cloud of ["aws", "azure", "gcp"]) {
+                for (const r of entry[cloud] || []) {
                   cells.push({
                     environment,
+                    tier,
                     cloud,
                     region: r.region,
                     region_index: r.region_index,
@@ -65,10 +68,13 @@ jobs:
       max-parallel: 1
       fail-fast: true
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    # dev applies straight through. staging/production are real GitHub
-    # Environments with required reviewers configured in repo Settings ->
-    # Environments -- the job pauses here until someone approves it.
-    environment: ${{ matrix.environment }}
+    # Gated by TIER, not instance name -- dev1/dev2/uat1/uat2/... all share
+    # their tier's GitHub Environment, so a new instance never needs its own
+    # secrets/reviewers provisioned. The dev tier applies straight through;
+    # every other tier is a real GitHub Environment with required reviewers
+    # configured in repo Settings -> Environments -- the job pauses here
+    # until someone approves it.
+    environment: ${{ matrix.tier }}
     permissions:
       id-token: write
       contents: read

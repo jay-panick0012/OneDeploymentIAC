@@ -1,0 +1,149 @@
+name: Destroy Environment
+
+# Deviation from a purely tier-independent approval gate: a single job can
+# only bind to ONE GitHub Environment, and cloud credentials are scoped to
+# the environment that authenticates the destroy step -- so a universal
+# "destroy-approval" gate covering every tier (including dev, which normally
+# has no reviewer requirement) can't share a job with the tier's own
+# credentials without a second job purely to pause for a human, which isn't
+# worth the added complexity here. Instead: destroy reuses the SAME
+# tier-based gate as apply (dev runs straight through, every other tier
+# requires its usual reviewer), backstopped by the confirm_name double-typing
+# below for every tier, dev included.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment_name:
+        description: "Environment instance to destroy (must match .github/environments.json exactly)"
+        required: true
+      confirm_name:
+        description: "Type the environment name again to confirm -- this destroys real cloud resources and cannot be undone"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm names match
+        run: |
+          if [ "${{ inputs.environment_name }}" != "${{ inputs.confirm_name }}" ]; then
+            echo "::error::environment_name and confirm_name must match exactly -- refusing to proceed"
+            exit 1
+          fi
+
+      - id: set-matrix
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const raw = JSON.parse(fs.readFileSync(".github/environments.json", "utf8"));
+            const name = "${{ inputs.environment_name }}";
+            const entry = raw[name];
+            if (!entry) {
+              core.setFailed(`environment "${name}" not found in .github/environments.json`);
+              return;
+            }
+            const cells = [];
+            for (const cloud of ["aws", "azure", "gcp"]) {
+              for (const r of entry[cloud] || []) {
+                cells.push({
+                  environment: name,
+                  tier: entry.tier,
+                  cloud,
+                  region: r.region,
+                  path: `environments/${name}/${cloud}/${r.region}`,
+                });
+              }
+            }
+            core.setOutput("matrix", JSON.stringify({ include: cells }));
+
+  destroy:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      # Sequential and stop-on-failure: never leave a partially-destroyed
+      # environment's remaining regions attempted after one has already failed.
+      max-parallel: 1
+      fail-fast: true
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    environment: ${{ matrix.tier }}
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ matrix.path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
+
+      - name: Azure login
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: GCP auth
+        if: matrix.cloud == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Terraform Destroy
+        run: terraform destroy -input=false -auto-approve -var-file=terraform.tfvars
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "### Destroyed ${{ matrix.environment }} / ${{ matrix.cloud }} / ${{ matrix.region }}" >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup:
+    needs: [generate-matrix, destroy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove environment directory and matrix entry
+        run: |
+          rm -rf "environments/${{ inputs.environment_name }}"
+          node -e '
+            const fs = require("fs");
+            const { serializeEnvironments, ENVIRONMENTS_PATH } = require("./scripts/generate-environment.cjs");
+            const environments = JSON.parse(fs.readFileSync(ENVIRONMENTS_PATH, "utf8"));
+            delete environments["${{ inputs.environment_name }}"];
+            fs.writeFileSync(ENVIRONMENTS_PATH, serializeEnvironments(environments));
+          '
+
+      - name: Commit removal directly to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Remove destroyed environment: ${{ inputs.environment_name }}"
+          git push

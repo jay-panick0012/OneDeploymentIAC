@@ -1,0 +1,233 @@
+{
+  "$comment": "Reusable sizing profiles. Any number of named environment instances (dev1, dev2, uat1, uat2, ...) can reference the same tier in environments.json -- the tier defines sizing, the instance name is just an isolated deployment of that sizing. Keys here map 1:1 to the module arguments in modules/<cloud>/region-stack/variables.tf; scripts/generate-environment.cjs copies a tier's block verbatim into a new environment's generated main.tf.",
+
+  "dev": {
+    "description": "Cost-optimized single-AZ/single-NAT sizing for day-to-day development.",
+    "requires_approval": false,
+    "aws": {
+      "availability_zone_suffixes": ["a", "b"],
+      "single_nat_gateway": true,
+      "kms_deletion_window_days": 7,
+      "s3_glacier_transition_days": 30,
+      "ecr_immutable_tags": false,
+      "ecr_retain_image_count": 10,
+      "eks_node_instance_types": ["t3.medium"],
+      "eks_desired_size": 2,
+      "eks_min_size": 1,
+      "eks_max_size": 3,
+      "eks_disk_size_gb": 30,
+      "eks_private_endpoint": false,
+      "rds_instance_class": "db.t3.medium",
+      "rds_allocated_storage": 20,
+      "rds_multi_az": false,
+      "rds_backup_retention_period": 3
+    },
+    "azure": {
+      "subnet_names": ["aks-nodes", "data"],
+      "acr_sku": "Basic",
+      "keyvault_sku": "standard",
+      "keyvault_soft_delete_days": 7,
+      "keyvault_purge_protection": false,
+      "aks_vm_size": "Standard_D2s_v3",
+      "aks_node_count": 2,
+      "aks_enable_auto_scaling": false,
+      "aks_min_count": 1,
+      "aks_max_count": 3
+    },
+    "gcp": {
+      "gke_mode": "standard",
+      "gke_node_count": 1,
+      "gke_machine_type": "e2-medium",
+      "gke_release_channel": "regular",
+      "gke_enable_private_cluster": false,
+      "cloudsql_tier": "db-f1-micro",
+      "cloudsql_high_availability": false,
+      "cloudsql_disk_size_gb": 20,
+      "kms_protection_level": "SOFTWARE"
+    }
+  },
+
+  "uat": {
+    "description": "Real but cheap user-acceptance-testing sizing. Single-AZ, no HA, modest node counts -- cheaper than staging, more headroom than dev.",
+    "requires_approval": true,
+    "aws": {
+      "availability_zone_suffixes": ["a", "b"],
+      "single_nat_gateway": true,
+      "kms_deletion_window_days": 14,
+      "s3_glacier_transition_days": 45,
+      "ecr_immutable_tags": true,
+      "ecr_retain_image_count": 15,
+      "eks_node_instance_types": ["t3.large"],
+      "eks_desired_size": 2,
+      "eks_min_size": 1,
+      "eks_max_size": 4,
+      "eks_disk_size_gb": 40,
+      "eks_private_endpoint": false,
+      "rds_instance_class": "db.t3.large",
+      "rds_allocated_storage": 30,
+      "rds_multi_az": false,
+      "rds_backup_retention_period": 5
+    },
+    "azure": {
+      "subnet_names": ["aks-nodes", "data"],
+      "acr_sku": "Standard",
+      "keyvault_sku": "standard",
+      "keyvault_soft_delete_days": 14,
+      "keyvault_purge_protection": false,
+      "aks_vm_size": "Standard_D2s_v3",
+      "aks_node_count": 2,
+      "aks_enable_auto_scaling": false,
+      "aks_min_count": 1,
+      "aks_max_count": 4
+    },
+    "gcp": {
+      "gke_mode": "standard",
+      "gke_node_count": 1,
+      "gke_machine_type": "e2-standard-2",
+      "gke_release_channel": "regular",
+      "gke_enable_private_cluster": false,
+      "cloudsql_tier": "db-g1-small",
+      "cloudsql_high_availability": false,
+      "cloudsql_disk_size_gb": 30,
+      "kms_protection_level": "SOFTWARE"
+    }
+  },
+
+  "staging": {
+    "description": "Mid-tier: multi-AZ NAT, autoscaling, HA databases.",
+    "requires_approval": true,
+    "aws": {
+      "availability_zone_suffixes": ["a", "b", "c"],
+      "single_nat_gateway": false,
+      "kms_deletion_window_days": 14,
+      "s3_glacier_transition_days": 60,
+      "ecr_immutable_tags": true,
+      "ecr_retain_image_count": 20,
+      "eks_node_instance_types": ["t3.large"],
+      "eks_desired_size": 3,
+      "eks_min_size": 2,
+      "eks_max_size": 6,
+      "eks_disk_size_gb": 50,
+      "eks_private_endpoint": true,
+      "rds_instance_class": "db.r6g.large",
+      "rds_allocated_storage": 50,
+      "rds_multi_az": true,
+      "rds_backup_retention_period": 7
+    },
+    "azure": {
+      "subnet_names": ["aks-nodes", "data", "services"],
+      "acr_sku": "Standard",
+      "keyvault_sku": "standard",
+      "keyvault_soft_delete_days": 30,
+      "keyvault_purge_protection": true,
+      "aks_vm_size": "Standard_D4s_v3",
+      "aks_node_count": 2,
+      "aks_enable_auto_scaling": true,
+      "aks_min_count": 2,
+      "aks_max_count": 6
+    },
+    "gcp": {
+      "gke_mode": "standard",
+      "gke_node_count": 2,
+      "gke_machine_type": "e2-standard-2",
+      "gke_release_channel": "regular",
+      "gke_enable_private_cluster": true,
+      "cloudsql_tier": "db-n1-standard-2",
+      "cloudsql_high_availability": true,
+      "cloudsql_disk_size_gb": 50,
+      "kms_protection_level": "SOFTWARE"
+    }
+  },
+
+  "rc": {
+    "description": "Release-candidate: mirrors production sizing/HA closely to validate a build under prod-like conditions, minus HSM-backed keys to avoid full production key-management overhead.",
+    "requires_approval": true,
+    "aws": {
+      "availability_zone_suffixes": ["a", "b", "c"],
+      "single_nat_gateway": false,
+      "kms_deletion_window_days": 30,
+      "s3_glacier_transition_days": 90,
+      "ecr_immutable_tags": true,
+      "ecr_retain_image_count": 30,
+      "eks_node_instance_types": ["m6i.large"],
+      "eks_desired_size": 3,
+      "eks_min_size": 2,
+      "eks_max_size": 8,
+      "eks_disk_size_gb": 80,
+      "eks_private_endpoint": true,
+      "rds_instance_class": "db.r6g.large",
+      "rds_allocated_storage": 80,
+      "rds_multi_az": true,
+      "rds_backup_retention_period": 10
+    },
+    "azure": {
+      "subnet_names": ["aks-nodes", "data", "services"],
+      "acr_sku": "Premium",
+      "keyvault_sku": "premium",
+      "keyvault_soft_delete_days": 60,
+      "keyvault_purge_protection": true,
+      "aks_vm_size": "Standard_D4s_v3",
+      "aks_node_count": 3,
+      "aks_enable_auto_scaling": true,
+      "aks_min_count": 2,
+      "aks_max_count": 8
+    },
+    "gcp": {
+      "gke_mode": "standard",
+      "gke_node_count": 3,
+      "gke_machine_type": "n2-standard-2",
+      "gke_release_channel": "stable",
+      "gke_enable_private_cluster": true,
+      "cloudsql_tier": "db-n1-standard-2",
+      "cloudsql_high_availability": true,
+      "cloudsql_disk_size_gb": 80,
+      "kms_protection_level": "SOFTWARE"
+    }
+  },
+
+  "production": {
+    "description": "Full HA: private endpoints, HSM keys, geo-replication.",
+    "requires_approval": true,
+    "aws": {
+      "availability_zone_suffixes": ["a", "b", "c"],
+      "single_nat_gateway": false,
+      "kms_deletion_window_days": 30,
+      "s3_glacier_transition_days": 90,
+      "ecr_immutable_tags": true,
+      "ecr_retain_image_count": 30,
+      "eks_node_instance_types": ["m6i.xlarge"],
+      "eks_desired_size": 4,
+      "eks_min_size": 3,
+      "eks_max_size": 12,
+      "eks_disk_size_gb": 100,
+      "eks_private_endpoint": true,
+      "rds_instance_class": "db.r6g.xlarge",
+      "rds_allocated_storage": 100,
+      "rds_multi_az": true,
+      "rds_backup_retention_period": 14
+    },
+    "azure": {
+      "subnet_names": ["aks-nodes", "data", "services", "management"],
+      "acr_sku": "Premium",
+      "keyvault_sku": "premium",
+      "keyvault_soft_delete_days": 90,
+      "keyvault_purge_protection": true,
+      "aks_vm_size": "Standard_D8s_v3",
+      "aks_node_count": 3,
+      "aks_enable_auto_scaling": true,
+      "aks_min_count": 3,
+      "aks_max_count": 12
+    },
+    "gcp": {
+      "gke_mode": "standard",
+      "gke_node_count": 3,
+      "gke_machine_type": "n2-standard-4",
+      "gke_release_channel": "stable",
+      "gke_enable_private_cluster": true,
+      "cloudsql_tier": "db-n1-standard-4",
+      "cloudsql_high_availability": true,
+      "cloudsql_disk_size_gb": 100,
+      "kms_protection_level": "HSM"
+    }
+  }
+}

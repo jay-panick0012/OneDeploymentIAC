@@ -5,7 +5,8 @@ on:
     paths:
       - "modules/**"
       - "environments/**"
-      - ".github/region-matrix.json"
+      - ".github/environments.json"
+      - ".github/tiers.json"
       - ".github/workflows/terraform-plan.yml"
 
 permissions:
@@ -38,14 +39,16 @@ jobs:
         with:
           script: |
             const fs = require("fs");
-            const raw = JSON.parse(fs.readFileSync(".github/region-matrix.json", "utf8"));
+            const raw = JSON.parse(fs.readFileSync(".github/environments.json", "utf8"));
             const cells = [];
-            for (const [environment, clouds] of Object.entries(raw)) {
+            for (const [environment, entry] of Object.entries(raw)) {
               if (environment.startsWith("$")) continue;
-              for (const [cloud, regions] of Object.entries(clouds)) {
-                for (const r of regions) {
+              const tier = entry.tier;
+              for (const cloud of ["aws", "azure", "gcp"]) {
+                for (const r of entry[cloud] || []) {
                   cells.push({
                     environment,
+                    tier,
                     cloud,
                     region: r.region,
                     region_index: r.region_index,
@@ -62,11 +65,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    # dev has no protection rules. staging/production plan runs against a
-    # dedicated "<env>-plan" GitHub Environment (no required reviewers, ideally
-    # a read-only cloud credential) so PR feedback isn't blocked on the same
-    # manual approval that gates apply against the real "<env>" environment.
-    environment: ${{ matrix.environment == 'dev' && 'dev' || format('{0}-plan', matrix.environment) }}
+    # Gated by TIER, not instance name -- dev1/dev2/uat1/uat2/... all share
+    # their tier's GitHub Environment, so a new instance never needs its own
+    # secrets/reviewers provisioned. The dev tier has no protection rules;
+    # every other tier's plan runs against a dedicated "<tier>-plan" GitHub
+    # Environment (no required reviewers, ideally a read-only cloud
+    # credential) so PR feedback isn't blocked on the same manual approval
+    # that gates apply against the real "<tier>" environment.
+    environment: ${{ matrix.tier == 'dev' && 'dev' || format('{0}-plan', matrix.tier) }}
     permissions:
       id-token: write
       contents: read
