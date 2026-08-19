@@ -10,7 +10,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 3.100"
+      version = "~> 4.0"
     }
   }
 }
@@ -23,14 +23,14 @@ resource "azurerm_kubernetes_cluster" "this" {
   kubernetes_version  = var.kubernetes_version
 
   default_node_pool {
-    name                 = "system"
-    node_count           = var.enable_auto_scaling ? null : var.node_count
-    vm_size              = var.vm_size
-    enable_auto_scaling  = var.enable_auto_scaling
-    min_count            = var.enable_auto_scaling ? var.min_count : null
-    max_count            = var.enable_auto_scaling ? var.max_count : null
-    os_disk_size_gb      = 50
-    type                 = "VirtualMachineScaleSets"
+    name                         = "system"
+    node_count                   = var.enable_auto_scaling ? null : var.node_count
+    vm_size                      = var.vm_size
+    auto_scaling_enabled         = var.enable_auto_scaling
+    min_count                    = var.enable_auto_scaling ? var.min_count : null
+    max_count                    = var.enable_auto_scaling ? var.max_count : null
+    os_disk_size_gb              = 50
+    type                         = "VirtualMachineScaleSets"
     only_critical_addons_enabled = true
 
     upgrade_settings {

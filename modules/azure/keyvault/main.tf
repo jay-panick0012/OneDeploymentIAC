@@ -7,7 +7,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 3.100"
+      version = "~> 4.0"
     }
   }
 }
@@ -23,7 +23,7 @@ resource "azurerm_key_vault" "this" {
   soft_delete_retention_days = var.soft_delete_days
   purge_protection_enabled   = var.purge_protection
 
-  enable_rbac_authorization = false
+  rbac_authorization_enabled = false
 
   network_acls {
     bypass         = "AzureServices"

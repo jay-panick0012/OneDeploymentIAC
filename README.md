@@ -70,7 +70,7 @@ model. See `scripts/new-region.sh` / `.ps1` below.
 | Provider | Version constraint |
 |----------|--------------------|
 | `hashicorp/aws` | `>= 5.0` |
-| `hashicorp/azurerm` | `>= 3.100` |
+| `hashicorp/azurerm` | `~> 4.0` |
 | `hashicorp/azuread` | `>= 2.47` |
 | `hashicorp/google` | `>= 5.0` |
 | `hashicorp/tls` | `>= 4.0` |

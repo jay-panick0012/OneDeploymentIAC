@@ -56,7 +56,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = ">= 3.100"
+      version = "~> 4.0"
     }
   }
 }
@@ -106,7 +106,7 @@ resource "azurerm_storage_account" "tfstate" {
   account_tier                    = "Standard"
   account_replication_type        = "GRS"       # geo-redundant for state durability
   account_kind                    = "StorageV2"
-  enable_https_traffic_only       = true
+  https_traffic_only_enabled      = true
   min_tls_version                 = "TLS1_2"
   shared_access_key_enabled       = false       # enforce Azure AD auth
   allow_nested_items_to_be_public = false
