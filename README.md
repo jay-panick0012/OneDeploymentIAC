@@ -72,7 +72,7 @@ model. See `scripts/new-region.sh` / `.ps1` below.
 | `hashicorp/aws` | `>= 5.0` |
 | `hashicorp/azurerm` | `~> 4.0` |
 | `hashicorp/azuread` | `>= 2.47` |
-| `hashicorp/google` | `>= 5.0` |
+| `hashicorp/google` | `~> 6.0` |
 | `hashicorp/tls` | `>= 4.0` |
 | `hashicorp/time` | `>= 0.11` |
 | `hashicorp/random` | `>= 3.5` |

@@ -33,7 +33,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">= 5.0"
+      version = "~> 6.0"
     }
   }
 }
@@ -86,7 +86,7 @@ resource "google_storage_bucket" "tfstate" {
   lifecycle_rule {
     condition {
       num_newer_versions = 100
-      is_live            = false
+      with_state         = "ARCHIVED"
     }
     action {
       type = "Delete"

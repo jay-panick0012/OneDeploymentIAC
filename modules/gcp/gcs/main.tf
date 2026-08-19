@@ -7,7 +7,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">= 5.0"
+      version = "~> 6.0"
     }
   }
 }
@@ -49,7 +49,7 @@ resource "google_storage_bucket" "this" {
     content {
       condition {
         num_newer_versions = 5
-        is_live            = false
+        with_state         = "ARCHIVED"
       }
       action {
         type = "Delete"

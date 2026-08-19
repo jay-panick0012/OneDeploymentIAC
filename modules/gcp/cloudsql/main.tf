@@ -7,7 +7,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = ">= 5.0"
+      version = "~> 6.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -51,7 +51,7 @@ resource "google_sql_database_instance" "this" {
     ip_configuration {
       ipv4_enabled    = false
       private_network = null # Set via var or data source in calling module
-      require_ssl     = true
+      ssl_mode        = "ENCRYPTED_ONLY"
     }
 
     maintenance_window {
