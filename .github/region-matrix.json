@@ -1,0 +1,42 @@
+{
+  "$comment": "Single source of truth for which environment/cloud/region combinations exist. Consumed by the generate-matrix job in every terraform-*.yml workflow, and by scripts/new-region.sh/.ps1 when scaffolding a new region. region_index must be globally unique across this entire file (it drives non-overlapping CIDR allocation in modules/*/region-stack) -- when adding an entry, use the next unused integer, never reuse one.",
+  "dev": {
+    "aws": [
+      { "region": "us-east-1", "region_index": 0 }
+    ],
+    "azure": [
+      { "region": "eastus", "region_index": 0 }
+    ],
+    "gcp": [
+      { "region": "us-central1", "region_index": 0 }
+    ]
+  },
+  "staging": {
+    "aws": [
+      { "region": "us-east-1", "region_index": 1 },
+      { "region": "eu-west-1", "region_index": 2 }
+    ],
+    "azure": [
+      { "region": "eastus", "region_index": 1 },
+      { "region": "westeurope", "region_index": 2 }
+    ],
+    "gcp": [
+      { "region": "us-central1", "region_index": 1 },
+      { "region": "europe-west1", "region_index": 2 }
+    ]
+  },
+  "production": {
+    "aws": [
+      { "region": "us-east-1", "region_index": 3 },
+      { "region": "eu-west-1", "region_index": 4 }
+    ],
+    "azure": [
+      { "region": "eastus", "region_index": 3 },
+      { "region": "westeurope", "region_index": 4 }
+    ],
+    "gcp": [
+      { "region": "us-central1", "region_index": 3 },
+      { "region": "europe-west1", "region_index": 4 }
+    ]
+  }
+}

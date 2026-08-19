@@ -29,8 +29,8 @@ output "cluster_principal_id" {
 }
 
 output "resource_group_name" {
-  description = "Name of the resource group containing the cluster."
-  value       = azurerm_resource_group.this.name
+  description = "Name of the resource group containing the cluster (passed through from var.resource_group_name)."
+  value       = var.resource_group_name
 }
 
 output "node_resource_group" {

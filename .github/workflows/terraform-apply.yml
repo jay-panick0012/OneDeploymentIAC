@@ -1,0 +1,119 @@
+name: Terraform Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "modules/**"
+      - "environments/**"
+      - ".github/region-matrix.json"
+      - ".github/workflows/terraform-apply.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Limit apply to a single environment (dev, staging, production). Leave blank to apply all."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-apply-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set-matrix
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const raw = JSON.parse(fs.readFileSync(".github/region-matrix.json", "utf8"));
+            const filterEnv = `${{ github.event.inputs.environment }}`;
+            const cells = [];
+            for (const [environment, clouds] of Object.entries(raw)) {
+              if (environment.startsWith("$")) continue;
+              if (filterEnv && environment !== filterEnv) continue;
+              for (const [cloud, regions] of Object.entries(clouds)) {
+                for (const r of regions) {
+                  cells.push({
+                    environment,
+                    cloud,
+                    region: r.region,
+                    region_index: r.region_index,
+                    path: `environments/${environment}/${cloud}/${r.region}`,
+                  });
+                }
+              }
+            }
+            core.setOutput("matrix", JSON.stringify({ include: cells }));
+
+  apply:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      # Sequential, not parallel: applying every region of every environment
+      # at once on every main-branch push is a large simultaneous blast
+      # radius. fail-fast stops the remaining queue on the first failure.
+      max-parallel: 1
+      fail-fast: true
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    # dev applies straight through. staging/production are real GitHub
+    # Environments with required reviewers configured in repo Settings ->
+    # Environments -- the job pauses here until someone approves it.
+    environment: ${{ matrix.environment }}
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ matrix.path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
+
+      - name: Azure login
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: GCP auth
+        if: matrix.cloud == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Terraform Plan
+        run: terraform plan -input=false -var-file=terraform.tfvars -out=tfplan
+
+      - name: Terraform Apply
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "### Applied ${{ matrix.environment }} / ${{ matrix.cloud }} / ${{ matrix.region }}" >> "$GITHUB_STEP_SUMMARY"

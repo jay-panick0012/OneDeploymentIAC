@@ -1,0 +1,26 @@
+# Terraform
+**/.terraform/*
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Never commit real backend/variable overrides with live credentials
+*.auto.tfvars
+!*.example.tfvars
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

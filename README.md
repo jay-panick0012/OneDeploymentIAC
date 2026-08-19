@@ -1,45 +1,55 @@
 # Infrastructure as Code – One Deployment Dashboard
 
-Multi-cloud Terraform modules and environment configurations for the One Deployment Dashboard.
-Targets AWS, Azure, and GCP from a single, well-structured IaC root.
+Centralized multi-cloud Terraform repository for AWS, Azure, and GCP. Every
+environment (dev/staging/production) is deployed as one or more **independent
+regional stacks** with isolated state, wired to GitHub Actions pipelines for
+plan-on-PR and approval-gated apply-on-merge.
 
 ---
 
 ## Directory Structure
 
 ```
-iac/
-├── README.md                        ← this file
+├── README.md
 ├── modules/
 │   ├── aws/
-│   │   ├── eks/                     AWS EKS cluster + managed node group + OIDC
-│   │   ├── ecr/                     Elastic Container Registry + lifecycle policy
-│   │   ├── s3/                      S3 bucket (versioning, SSE, lifecycle)
-│   │   ├── iam-role/                Generic IAM role with managed policy attachments
-│   │   ├── kms/                     Customer-managed KMS key + alias
-│   │   ├── rds/                     RDS PostgreSQL instance + subnet group
-│   │   └── vpc/                     VPC, public/private subnets, IGW, NAT, routes
+│   │   ├── vpc/, eks/, ecr/, s3/, iam-role/, kms/, rds/     ← leaf modules
+│   │   ├── sns-sqs/, cloudwatch/, route53/                  ← messaging / monitoring / DNS
+│   │   └── region-stack/                                    ← composes all of the above for ONE region
 │   ├── azure/
-│   │   ├── aks/                     AKS cluster + Log Analytics
-│   │   ├── acr/                     Azure Container Registry (with geo-replication)
-│   │   ├── keyvault/                Azure Key Vault + access policy
-│   │   ├── service-principal/       AAD App + SP + rotating password + role assignment
-│   │   └── vnet/                    Virtual Network + subnets + NSGs
+│   │   ├── vnet/, aks/, acr/, keyvault/, service-principal/
+│   │   ├── servicebus/, monitor/, dns/
+│   │   └── region-stack/
 │   └── gcp/
-│       ├── gke/                     GKE cluster (autopilot or standard) + node pool
-│       ├── artifact-registry/       Artifact Registry repository (Docker/Maven/NPM)
-│       ├── cloudsql/                Cloud SQL instance (Postgres) + database
-│       ├── kms/                     KMS key ring + crypto key with rotation
-│       └── gcs/                     GCS bucket (versioning, lifecycle, uniform access)
+│       ├── gke/, artifact-registry/, cloudsql/, kms/, gcs/
+│       ├── pubsub/, monitoring/, cloud-dns/
+│       └── region-stack/
 ├── environments/
-│   ├── dev/                         Cost-optimised: single NAT, small instances
-│   ├── staging/                     Mid-tier: multi-AZ NAT, autoscaling, HA databases
-│   └── production/                  Full HA: private endpoints, HSM keys, geo-replication
-└── state-backends/
-    ├── aws.tf                       S3 + DynamoDB backend (bootstrap + config template)
-    ├── azure.tf                     Azure Blob Storage backend (bootstrap + config template)
-    └── gcp.tf                       GCS backend (bootstrap + config template)
+│   ├── dev/{aws,azure,gcp}/<region>/          ← 1 region per cloud, cost-optimized
+│   ├── staging/{aws,azure,gcp}/<region>/      ← 2 regions per cloud, mid-tier
+│   └── production/{aws,azure,gcp}/<region>/   ← 2 regions per cloud, full HA
+├── state-backends/            ← one-time bootstrap of the shared remote state backends
+├── scripts/
+│   ├── new-region.sh          ← scaffold a new environments/<env>/<cloud>/<region>/ (bash)
+│   └── new-region.ps1         ← same, PowerShell
+└── .github/
+    ├── region-matrix.json     ← single source of truth: which env/cloud/region cells exist
+    ├── workflows/
+    │   ├── terraform-plan.yml    (PR: fmt/validate/tflint/tfsec/plan, posts plan as PR comment)
+    │   ├── terraform-apply.yml   (push to main: apply, gated by GitHub Environment approval)
+    │   └── terraform-drift.yml   (nightly: plan-only, opens an issue on drift)
+    └── PULL_REQUEST_TEMPLATE.md
 ```
+
+### Why region is a directory, not a variable
+
+Terraform's AWS provider is region-bound at the provider block, and `for_each`
+cannot select a different provider alias per iteration — so one root module
+can't cleanly fan a single region *list* out across providers. Instead, each
+region gets its **own root directory** with its own (single, non-aliased)
+provider and its own state file, composing a shared `region-stack` module.
+Adding a region is adding a directory, not fighting Terraform's provider
+model. See `scripts/new-region.sh` / `.ps1` below.
 
 ---
 
@@ -52,8 +62,10 @@ iac/
 | Azure CLI | 2.x | Required for AzureRM/AzureAD providers |
 | gcloud CLI | 470+ | Required for Google provider auth |
 | kubectl | 1.29+ | Optional, for post-deploy cluster access |
+| tflint | 0.53+ | Optional locally; runs in CI |
+| tfsec | latest | Optional locally; runs in CI |
 
-### Provider versions (pinned in each environment `main.tf`)
+### Provider versions (pinned in every region root's `main.tf`)
 
 | Provider | Version constraint |
 |----------|--------------------|
@@ -67,225 +79,228 @@ iac/
 
 ---
 
-## Authentication
+## Authentication (local CLI use)
 
 ### AWS
-
 ```bash
-# Option A – named profile
 export AWS_PROFILE=my-profile
-
-# Option B – environment variables (CI recommended)
+# or
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_SESSION_TOKEN=...        # if using assumed roles
-
-# Option C – OIDC (GitHub Actions, GitLab CI)
-# Configure aws-actions/configure-aws-credentials and use OIDC role ARNs.
 ```
 
 ### Azure
-
 ```bash
-# Interactive login (local dev)
 az login
 az account set --subscription "00000000-0000-0000-0000-000000000000"
-
-# Service Principal (CI)
-export ARM_CLIENT_ID="..."
-export ARM_CLIENT_SECRET="..."
-export ARM_SUBSCRIPTION_ID="..."
-export ARM_TENANT_ID="..."
-
-# Workload Identity / OIDC (recommended for GitHub Actions)
-export ARM_USE_OIDC=true
-export ARM_CLIENT_ID="..."
-export ARM_SUBSCRIPTION_ID="..."
-export ARM_TENANT_ID="..."
 ```
 
 ### GCP
-
 ```bash
-# Interactive login (local dev)
 gcloud auth application-default login
 gcloud config set project MY_PROJECT_ID
-
-# Service Account key (not recommended for production)
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa-key.json
-
-# Workload Identity Federation (recommended for CI)
-# Configure gcloud to use the WIF provider and impersonate a service account.
-export GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=terraform@my-project.iam.gserviceaccount.com
 ```
+
+CI uses OIDC federation instead of any of the above — see **CI/CD Pipelines** below.
 
 ---
 
 ## Remote State Bootstrap
 
-Before using any environment, bootstrap the remote state backend **once** per cloud:
+All regions of all environments share the **same** three backends (one per
+cloud); only the state `key`/`prefix` differs per region. Bootstrap each
+backend once:
 
 ### AWS (S3 + DynamoDB)
-
 ```bash
-cd iac/state-backends
-terraform init        # uses local state for bootstrap
+cd state-backends
+terraform init
 terraform apply \
   -var="state_bucket_name=one-deploy-dash-tfstate" \
   -var="state_lock_table_name=one-deploy-dash-tflock" \
   -var="state_aws_region=us-east-1"
 ```
 
-Then uncomment the `backend "s3" {}` block in each environment's `main.tf` and re-run `terraform init -migrate-state`.
-
 ### Azure Blob
-
 ```bash
-cd iac/state-backends
+cd state-backends
 terraform init
 terraform apply \
   -var="azure_subscription_id=00000000-..." \
   -var="state_storage_account_name=onedeploydashtfstate"
 ```
 
-Then uncomment the `backend "azurerm" {}` block and re-run `terraform init -migrate-state`.
-
 ### GCP (GCS)
-
 ```bash
-cd iac/state-backends
+cd state-backends
 terraform init
 terraform apply \
   -var="gcp_project=my-gcp-project" \
   -var="terraform_sa_email=terraform@my-gcp-project.iam.gserviceaccount.com"
 ```
 
-Then uncomment the `backend "gcs" {}` block and re-run `terraform init -migrate-state`.
+The default GCS bucket name is `one-deploy-dash-tfstate-${gcp_project}` — if
+you bootstrap against your own GCP project, update the `bucket` value in
+every `environments/*/gcp/*/backend.hcl` (they ship with a `CHANGEME`
+placeholder) to match.
 
 ---
 
-## Working with Environments
+## Working with a Region
 
-### Standard workflow
+Every region directory (`environments/<env>/<cloud>/<region>/`) is a
+self-contained Terraform root. Its `terraform { backend "<cloud>" {} }` block
+is intentionally empty — concrete backend values live in that directory's
+`backend.hcl` and are supplied at init time (backend blocks can't reference
+variables, and the GCS bucket name is project-specific):
 
 ```bash
-# 1. Change into the target environment directory
-cd iac/environments/dev     # or staging / production
+cd environments/dev/aws/us-east-1
 
-# 2. Initialise (downloads providers, configures backend)
-terraform init
-
-# 3. Review what will be created/changed
-terraform plan -var-file=terraform.tfvars
-
-# 4. Apply (requires explicit approval)
+terraform init -backend-config=backend.hcl
+terraform plan  -var-file=terraform.tfvars
 terraform apply -var-file=terraform.tfvars
-
-# 5. Destroy (use with caution in production)
-terraform destroy -var-file=terraform.tfvars
+terraform destroy -var-file=terraform.tfvars   # use with caution
 ```
 
-### Workspace-per-environment (alternative)
-
-If you prefer a single directory with Terraform workspaces instead of
-separate directories, create workspaces that map to environments:
-
-```bash
-terraform workspace new dev
-terraform workspace select dev
-terraform apply -var-file=environments/dev/terraform.tfvars
-```
-
-The state-backend key paths include `${terraform.workspace}` to keep state isolated.
+Fill in the placeholder values in each region's `terraform.tfvars` first
+(`aws_account_id`, `azure_subscription_id`, `gcp_project` — marked `# replace`
+in every file) — never commit real account/subscription IDs beyond these
+placeholders; inject real values via `TF_VAR_*` environment variables or your
+secrets manager instead.
 
 ### Targeting a subset of resources
-
 ```bash
-# Apply only the EKS module
-terraform apply -target=module.aws_eks
-
-# Destroy only the dev RDS instance
-terraform destroy -target=module.aws_rds
+terraform apply -target=module.stack.module.eks     # AWS example
+terraform destroy -target=module.stack.module.rds
 ```
 
 ---
 
-## Module Calling Convention
+## Region Strategy
 
-Each module is called with the `source` path relative to the environment directory:
+| Environment | Regions per cloud | `region_index` values |
+|-------------|--------------------|------------------------|
+| dev | 1 (cost-optimized) | 0 |
+| staging | 2 (mid-tier) | 1, 2 |
+| production | 2 (primary + DR, full HA) | 3, 4 |
 
-```hcl
-module "aws_eks" {
-  source = "../../../modules/aws/eks"
+`region_index` is a **globally unique** integer (across the whole repo, not
+per cloud) used to derive a non-overlapping CIDR block for that region's
+VPC/VNet via `cidrsubnet(supernet, 8, region_index)` (GCP's GKE master range
+uses the same trick against a `/12`). `.github/region-matrix.json` is the
+single source of truth for which `{environment, cloud, region}` cells exist
+and their `region_index` — both the GitHub Actions matrix and
+`scripts/new-region.*` read it.
 
-  cluster_name        = "my-cluster-dev"
-  kubernetes_version  = "1.30"
-  region              = "us-east-1"
-  vpc_id              = module.aws_vpc.vpc_id
-  subnet_ids          = module.aws_vpc.private_subnet_ids
-  node_instance_types = ["t3.medium"]
-  desired_size        = 2
-  min_size            = 1
-  max_size            = 4
-  disk_size_gb        = 50
-  environment         = "dev"
-  enable_oidc         = true
-  tags                = { Environment = "dev" }
-}
-```
+### Adding a new region
 
-All modules expose consistent `tags` (AWS/Azure) or `labels` (GCP) variables.
+1. Run the scaffold script, picking the next unused `region_index` from
+   `.github/region-matrix.json`:
+   ```bash
+   scripts/new-region.sh production aws ap-south-1 5
+   # or on Windows:
+   scripts/new-region.ps1 -Environment production -Cloud aws -NewRegion ap-south-1 -RegionIndex 5
+   ```
+2. Add the new region to `.github/region-matrix.json` under the matching
+   `environment` → `cloud` array, with the **same** `region_index`.
+3. Review the generated `terraform.tfvars`/`backend.hcl` (region names
+   sometimes appear inside other strings the script's find/replace won't
+   catch), then `terraform init -backend-config=backend.hcl && terraform plan`.
+4. Open a PR — the `terraform-plan` pipeline picks up the new cell
+   automatically from `region-matrix.json`.
+
+### Adding a new service module
+
+1. Create `modules/<cloud>/<service>/{main,variables,outputs}.tf` following
+   the conventions of an existing module in that cloud (banner comment,
+   `tags`/`labels` variable, `description` on every variable, resources named
+   `this`).
+2. Wire it into `modules/<cloud>/region-stack/{main,variables,outputs}.tf`
+   (gate it behind an `enable_<service>` bool + `count` if it shouldn't exist
+   in every tier, following the pattern already used for messaging/
+   monitoring/DNS).
+3. Every environment/region that calls that region-stack picks up the new
+   service on its next `terraform apply` — no environment file changes
+   needed unless you want to override a non-default value.
 
 ---
 
-## How the Dashboard Backend Uses These Modules
+## CI/CD Pipelines
 
-The One Deployment Dashboard API runner integrates with this IaC layer in two ways:
+Driven entirely by `.github/region-matrix.json` — a `generate-matrix` job in
+each workflow flattens it into one `{environment, cloud, region, path}` cell
+per job. Adding a region is a one-line JSON edit; no workflow changes.
 
-1. **Terraform CLI wrapper** – The backend spawns `terraform` subprocesses with
-   appropriate `-var` flags and environment credentials injected from the
-   dashboard's secrets store. Stdout/stderr are streamed back to the UI in
-   real time via Server-Sent Events.
+- **`terraform-plan.yml`** — on every PR touching `modules/**`,
+  `environments/**`, or the matrix file: repo-wide `fmt`/one cell each of
+  `validate`/`tflint`/`tfsec`, then `terraform plan`, posted as a PR comment
+  (one comment per cell, updated in place on subsequent pushes).
+- **`terraform-apply.yml`** — on push to `main`: re-plans and applies each
+  cell **sequentially** (not in parallel — a simultaneous full-matrix apply
+  is too large a blast radius for one push). The job's `environment:` is set
+  to `matrix.environment`, so GitHub Environment protection rules gate it:
+  `dev` runs straight through; `staging`/`production` pause for a required
+  reviewer.
+- **`terraform-drift.yml`** — nightly, plan-only against every cell; opens or
+  updates a `terraform-drift`-labeled GitHub issue when a plan shows
+  unapplied changes.
 
-2. **State introspection** – After `apply`, the backend calls
-   `terraform output -json` to extract module outputs (cluster endpoints, ARNs,
-   connection strings) and stores them in the dashboard database, making them
-   available to the deployment UI without requiring direct cloud API access.
+### One-time GitHub setup (manual — not something this repo can configure for itself)
 
-### Expected environment variables for the API runner
-
-| Variable | Purpose |
-|----------|---------|
-| `TF_VAR_aws_account_id` | Injected as Terraform variable |
-| `TF_VAR_azure_subscription_id` | Injected as Terraform variable |
-| `TF_VAR_gcp_project` | Injected as Terraform variable |
-| `AWS_PROFILE` or `AWS_ACCESS_KEY_ID` etc. | AWS provider authentication |
-| `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` | Azure provider authentication |
-| `GOOGLE_APPLICATION_CREDENTIALS` or WIF config | GCP provider authentication |
-| `TF_WORKSPACE` | Selects the Terraform workspace (maps to environment) |
-| `TF_CLI_ARGS_init` | Optional: pass `-backend-config` overrides |
+1. **GitHub Environments** (Settings → Environments): create `dev`,
+   `staging`, `staging-plan`, `production`, `production-plan`. Add required
+   reviewers to `staging` and `production` only — the `*-plan` variants exist
+   so PR-triggered plans and the nightly drift check aren't blocked on the
+   same approval that gates a real apply (ideally scope the `*-plan`
+   environments to a **read-only** cloud credential).
+2. **Secrets**, per environment (`dev`, `staging`/`staging-plan`,
+   `production`/`production-plan`):
+   - AWS: `AWS_ROLE_ARN` — an IAM role trusting GitHub's OIDC provider.
+   - Azure: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` — a
+     federated-credential App Registration.
+   - GCP: `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` — Workload
+     Identity Federation, no service account keys.
+   
+   None of these are secrets a Terraform-in-this-repo run can create for
+   itself — each requires real cloud console/CLI access to set up the OIDC
+   trust relationship first.
+3. Branch protection on `main`: require the `terraform-plan` check before
+   merge.
 
 ---
 
 ## Security Notes
 
-- **Never commit secrets** to `terraform.tfvars`. Use environment variables
-  (`TF_VAR_*`) or a secrets manager (AWS SSM Parameter Store / Secrets Manager,
-  Azure Key Vault, GCP Secret Manager) to inject sensitive values at plan/apply time.
-- RDS master passwords are managed by AWS Secrets Manager via
-  `manage_master_user_password = true` – no plaintext password in state.
-- GKE and EKS cluster CA certificates are marked `sensitive = true` in outputs.
+- **Never commit real secrets.** `terraform.tfvars` files in this repo ship
+  with clearly marked placeholder account/subscription/project IDs — replace
+  them locally or inject real values via `TF_VAR_*` / a secrets manager, and
+  keep the replacement out of version control.
+- RDS master passwords are managed by AWS Secrets Manager
+  (`manage_master_user_password = true`) — no plaintext password in state.
+- GKE and EKS cluster CA certificates and endpoints are `sensitive = true` outputs.
 - Azure Key Vault has `purge_protection_enabled = true` in staging/production.
-- Production S3 state bucket enforces KMS encryption and public access block.
-- IAM roles follow least-privilege; extend by attaching additional managed or
-  inline policies via the `iam-role` module.
+- Production S3 state bucket enforces KMS encryption and a public access block.
+- CI never uses long-lived cloud credentials — every workflow authenticates
+  via OIDC (`aws-actions/configure-aws-credentials`, `azure/login`,
+  `google-github-actions/auth`).
+- IAM roles/service accounts follow least-privilege; extend by attaching
+  additional policies via the `iam-role` (AWS) or `service-principal` (Azure)
+  modules rather than widening an existing role.
 
 ---
 
 ## Contributing
 
-1. Add new modules under `iac/modules/<cloud>/<service>/`.
-2. Every module must have `main.tf`, `variables.tf`, and `outputs.tf`.
-3. Use `terraform fmt -recursive` before committing.
-4. Run `terraform validate` in each changed module directory.
-5. Update this README if new prerequisites or bootstrap steps are needed.
+1. Add new leaf modules under `modules/<cloud>/<service>/`; wire them into
+   the corresponding `region-stack` module (see "Adding a new service module"
+   above).
+2. Every module must have `main.tf`, `variables.tf`, and `outputs.tf`, with a
+   `description` on every variable and output.
+3. Run `terraform fmt -recursive` and `terraform validate` (per changed root)
+   before committing — the `terraform-plan` pipeline enforces both.
+4. New regions go through `scripts/new-region.sh`/`.ps1` plus a
+   `region-matrix.json` update — see "Adding a new region" above.
+5. Update this README when prerequisites, bootstrap steps, or the pipeline
+   setup change.

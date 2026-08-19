@@ -1,0 +1,169 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    paths:
+      - "modules/**"
+      - "environments/**"
+      - ".github/region-matrix.json"
+      - ".github/workflows/terraform-plan.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fmt-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: Terraform Format Check (whole repo)
+        run: terraform fmt -check -diff -recursive .
+
+  generate-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set-matrix
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const raw = JSON.parse(fs.readFileSync(".github/region-matrix.json", "utf8"));
+            const cells = [];
+            for (const [environment, clouds] of Object.entries(raw)) {
+              if (environment.startsWith("$")) continue;
+              for (const [cloud, regions] of Object.entries(clouds)) {
+                for (const r of regions) {
+                  cells.push({
+                    environment,
+                    cloud,
+                    region: r.region,
+                    region_index: r.region_index,
+                    path: `environments/${environment}/${cloud}/${r.region}`,
+                  });
+                }
+              }
+            }
+            core.setOutput("matrix", JSON.stringify({ include: cells }));
+
+  plan:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+    # dev has no protection rules. staging/production plan runs against a
+    # dedicated "<env>-plan" GitHub Environment (no required reviewers, ideally
+    # a read-only cloud credential) so PR feedback isn't blocked on the same
+    # manual approval that gates apply against the real "<env>" environment.
+    environment: ${{ matrix.environment == 'dev' && 'dev' || format('{0}-plan', matrix.environment) }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: ${{ matrix.path }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ matrix.region }}
+
+      - name: Azure login
+        if: matrix.cloud == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: GCP auth
+        if: matrix.cloud == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Terraform Init
+        run: terraform init -backend-config=backend.hcl
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: TFLint
+        run: |
+          tflint --init --chdir="${{ github.workspace }}"
+          tflint -f compact --chdir="${{ github.workspace }}/${{ matrix.path }}"
+
+      - name: tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: ${{ matrix.path }}
+          soft_fail: true
+
+      - name: Terraform Plan
+        id: plan
+        continue-on-error: true
+        run: |
+          terraform plan -input=false -var-file=terraform.tfvars -out=tfplan
+          terraform show -no-color tfplan > plan.txt
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const path = `${{ matrix.path }}/plan.txt`;
+            const plan = fs.existsSync(path)
+              ? fs.readFileSync(path, "utf8").slice(0, 60000)
+              : "(plan failed to produce output — see workflow run logs)";
+            const marker = `<!-- tf-plan:${{ matrix.environment }}:${{ matrix.cloud }}:${{ matrix.region }} -->`;
+            const status = "${{ steps.plan.outcome }}" === "success" ? "✅" : "❌";
+            const body = `${marker}\n### ${status} Terraform Plan — ${{ matrix.environment }} / ${{ matrix.cloud }} / ${{ matrix.region }}\n<details><summary>Show plan</summary>\n\n\`\`\`\n${plan}\n\`\`\`\n</details>`;
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.data.find((c) => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail job if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1

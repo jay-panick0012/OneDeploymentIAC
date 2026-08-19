@@ -1,7 +1,9 @@
 ###############################################################################
 # Azure AKS Module – main.tf
-# Creates: Resource Group, AKS cluster with Azure CNI, SystemAssigned identity,
-#          RBAC, and optional autoscaling
+# Creates: AKS cluster with Azure CNI, SystemAssigned identity, RBAC, and
+#          optional autoscaling. Deploys into an existing resource group
+#          (resource_group_name) shared with sibling modules (vnet, acr,
+#          keyvault) rather than creating its own.
 ###############################################################################
 
 terraform {
@@ -13,17 +15,10 @@ terraform {
   }
 }
 
-resource "azurerm_resource_group" "this" {
-  name     = var.resource_group_name
-  location = var.location
-
-  tags = merge(var.tags, { Environment = var.environment })
-}
-
 resource "azurerm_kubernetes_cluster" "this" {
   name                = var.cluster_name
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
+  location            = var.location
+  resource_group_name = var.resource_group_name
   dns_prefix          = var.cluster_name
   kubernetes_version  = var.kubernetes_version
 
@@ -79,8 +74,8 @@ resource "azurerm_kubernetes_cluster" "this" {
 
 resource "azurerm_log_analytics_workspace" "this" {
   name                = "${var.cluster_name}-logs"
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
+  location            = var.location
+  resource_group_name = var.resource_group_name
   sku                 = "PerGB2018"
   retention_in_days   = 30
 
